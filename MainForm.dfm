@@ -1,0 +1,83 @@
+object FormMain: TFormMain
+  Left = 0
+  Top = 0
+  Caption = #21029#12450#12503#12522#12391#12463#12522#12483#12503#12508#12540#12489#12434#20351#12358#12392#21453#24540#12375#12414#12377
+  ClientHeight = 397
+  ClientWidth = 227
+  Color = clBtnFace
+  Font.Charset = DEFAULT_CHARSET
+  Font.Color = clWindowText
+  Font.Height = -11
+  Font.Name = 'Tahoma'
+  Font.Style = []
+  OldCreateOrder = False
+  Position = poScreenCenter
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  PixelsPerInch = 96
+  TextHeight = 13
+  object Image1: TImage
+    Left = 0
+    Top = 146
+    Width = 227
+    Height = 87
+    Align = alTop
+    ExplicitWidth = 257
+  end
+  object Image2: TImage
+    Left = 0
+    Top = 266
+    Width = 227
+    Height = 131
+    Align = alClient
+    ExplicitTop = 272
+    ExplicitWidth = 284
+    ExplicitHeight = 87
+  end
+  object Panel1: TPanel
+    Left = 0
+    Top = 0
+    Width = 227
+    Height = 33
+    Align = alTop
+    Caption = 'Text'
+    TabOrder = 0
+    ExplicitTop = -6
+    ExplicitWidth = 257
+  end
+  object Memo1: TMemo
+    Left = 0
+    Top = 33
+    Width = 227
+    Height = 80
+    Align = alTop
+    TabOrder = 1
+    ExplicitLeft = 8
+    ExplicitTop = 193
+    ExplicitWidth = 257
+  end
+  object Panel2: TPanel
+    Left = 0
+    Top = 113
+    Width = 227
+    Height = 33
+    Align = alTop
+    Caption = 'Bitmap'
+    TabOrder = 2
+    ExplicitLeft = -8
+    ExplicitTop = 145
+    ExplicitWidth = 257
+  end
+  object Panel3: TPanel
+    Left = 0
+    Top = 233
+    Width = 227
+    Height = 33
+    Align = alTop
+    Caption = 'Png'
+    TabOrder = 3
+    ExplicitLeft = -8
+    ExplicitTop = 295
+    ExplicitWidth = 257
+  end
+end
