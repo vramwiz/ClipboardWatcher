@@ -81,6 +81,55 @@ end;
 - OpenClipboard の競合対策として `SafeOpenClipboard` を使用（最大10回までリトライ）
 - 500ms のデバウンスタイマー（`CLIPBOARD_DEBOUNCE_MS`）で連続通知を抑制
 
+
+---
+
+## 🧰 グローバル関数の使用例
+
+クリップボードの内容を直接取得・設定するグローバル関数が用意されています。`TClipboardWatcher` を使用せずに、任意のタイミングで利用可能です。
+
+### 📥 データの取得（Get）
+
+```pascal
+var
+  Text: string;
+  Bitmap: TBitmap;
+  Png: TPngImage;
+begin
+  if GetClipboardText(Text) then
+    ShowMessage(Text);
+
+  Bitmap := TBitmap.Create;
+  try
+    if GetClipboardBitmap(Bitmap) then
+      Image1.Picture.Assign(Bitmap);
+  finally
+    Bitmap.Free;
+  end;
+
+  Png := TPngImage.Create;
+  try
+    if GetClipboardPng(Png) then
+      Png.SaveToFile('clipboard.png');
+  finally
+    Png.Free;
+  end;
+end;
+```
+
+### 📤 データの設定（Set）
+
+```pascal
+begin
+  SetClipboardText('Hello, world!');
+  SetClipboardBitmap(Image1.Picture.Bitmap);
+  SetClipboardPng(MyPngImage); // TPngImage 型の変数
+end;
+```
+---
+
+これらの関数は内部で `SafeOpenClipboard` による排他制御を行っており、安全に動作します。失敗した場合は `False` を返し、リソースは初期化済みの状態に保たれます。
+
 ---
 
 ## 📄 ライセンス
@@ -94,3 +143,5 @@ MIT License またはプロジェクトの方針に従って自由に設定し�
 Created by **vramwiz**  
 Created: 2025-07-10  
 Updated: 2025-07-10
+
+

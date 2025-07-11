@@ -28,6 +28,9 @@ unit ClipboardWatcher;
     - OpenClipboard には排他制御のため SafeOpenClipboard を使用
     - 外部アプリが大量に書き込む場合、同一内容の連続イベントを除去可能
 
+  クリップボードの内容を直接取得・設定するグローバル関数が用意されています。
+  `TClipboardWatcher` を使用せずに、任意のタイミングで利用可能です。
+
   Author      : vramwiz
   Created     : 2025-07-10
   Updated     : 2025-07-10
@@ -66,11 +69,6 @@ type
     FOnChange      : TClipboardWatcherChangeEvent;
 
     function GetClipboard() : Boolean;
-    function GetClipboardBitmap() : Boolean;
-    function GetClipboardPng() : Boolean;
-    function GetClipboardText() : Boolean;
-
-    function SafeOpenClipboard(hWnd: HWND = 0; Retry: Integer = 10; DelayMS: Integer = 50): Boolean;
 
     procedure WndProc(var Msg: TMessage);
     procedure ClipboardExecute();
@@ -93,6 +91,12 @@ type
 
 // 指定されたビットマップをクリップボードにコピー
 procedure SetClipboardBitmap(Bmp: TBitmap);
+// クリップボードからビットマップ取得
+function GetClipboardBitmap(Bitmap : TBitmap) : Boolean;
+// クリップボードからPng画像取得
+function GetClipboardPng(Png : TPngImage) : Boolean;
+// クリップボードからテキスト取得
+function GetClipboardText(var Text : string) : Boolean;
 
 
 implementation
@@ -104,6 +108,228 @@ uses
 var
   CF_PNG: UINT = 0;
   ClipboardUpdateIsSelf : Boolean;
+
+//  クリップボードを安全に開く
+function SafeOpenClipboard(hWnd: HWND = 0; Retry: Integer = 10; DelayMS: Integer = 50): Boolean;
+var
+  i: Integer;
+begin
+  for i := 1 to Retry do
+  begin
+    if OpenClipboard(hWnd) then
+      Exit(True);
+    Sleep(DelayMS);
+  end;
+  Result := False;
+end;
+
+
+
+constructor TClipboardWatcher.Create;
+begin
+  inherited;
+  FLastTime := 0;
+  FWindowHandle := AllocateHWnd(WndProc);
+  AddClipboardFormatListener(FWindowHandle);
+
+  FBitmap := TBitmap.Create;
+  FPng    := TPngImage.Create;
+
+  FTimerAgent := TTimer.Create(nil);
+  FTimerAgent.Enabled := False;
+  FTimerAgent.Interval := 10;
+  FTimerAgent.OnTimer := OnTimerAgent;
+
+  FTimerTimeout := TTimer.Create(nil);
+  FTimerTimeout.Enabled := False;
+  FTimerTimeout.Interval := 30;
+  FTimerTimeout.OnTimer := OnTimerTimeOut;
+
+end;
+
+destructor TClipboardWatcher.Destroy;
+begin
+  FTimerTimeout.Free;
+  FTimerAgent.Free;
+  FPng.Free;
+  FBitmap.Free;
+  RemoveClipboardFormatListener(FWindowHandle);
+  DeallocateHWnd(FWindowHandle);
+  inherited;
+end;
+
+procedure TClipboardWatcher.DoChange(
+  const DataTypes: TClipboardWatcherDataTypes);
+begin
+  if Assigned(FOnChange) then FOnChange(Self,DataTypes);
+end;
+
+function GetClipboardBitmapSub(Bitmap  : TBitmap): Boolean;
+var
+  hBmp: HBITMAP;
+begin
+  result := False;
+
+  if not IsClipboardFormatAvailable(CF_BITMAP) then Exit;
+
+  hBmp := GetClipboardData(CF_BITMAP);
+  if hBmp = 0 then Exit;
+
+  hBmp := CopyImage(hBmp, IMAGE_BITMAP, 0, 0, LR_COPYRETURNORG or LR_COPYDELETEORG);
+  if hBmp = 0 then Exit;
+
+  Bitmap.Handle := 0;
+  Bitmap.Handle := hBmp;
+  result := True;
+end;
+
+function GetClipboardPngSub(Png     : TPngImage): Boolean;
+var
+  hData: THandle;
+  pData: Pointer;
+  Size: Integer;
+  Stream: TMemoryStream;
+begin
+  Result := False;
+
+  // WindowsでPNG形式のクリップボードフォーマットを取得（レジスタされていない場合は0）
+  if CF_PNG = 0 then
+    Exit;
+
+  if not IsClipboardFormatAvailable(CF_PNG) then Exit;
+
+  hData := GetClipboardData(CF_PNG);
+  if hData = 0 then Exit;
+
+  pData := GlobalLock(hData);
+  if not Assigned(pData) then Exit;
+
+  try
+    Size := GlobalSize(hData);
+    if Size = 0 then Exit;
+
+    Stream := TMemoryStream.Create;
+    try
+      Stream.WriteBuffer(pData^, Size);
+      Stream.Position := 0;
+      Png.LoadFromStream(Stream);
+      Result := True;
+    finally
+      Stream.Free;
+    end;
+  finally
+    GlobalUnlock(hData);
+  end;
+end;
+
+function GetClipboardTextSub(var Text    : string): Boolean;
+var
+  hData: THandle;
+  pData: PChar;
+begin
+  Result := False;
+  Text := '';
+
+  if not IsClipboardFormatAvailable(CF_UNICODETEXT) then Exit;
+
+  hData := GetClipboardData(CF_UNICODETEXT);
+  if hData = 0 then Exit;
+
+  pData := GlobalLock(hData);
+  if not Assigned(pData) then Exit;
+
+  try
+    Text := pData;
+    Result := True;
+  finally
+    GlobalUnlock(hData);
+  end;
+end;
+
+function TClipboardWatcher.GetClipboard() : Boolean;
+begin
+  result := False;
+  if IsClipboardFormatAvailable(CF_BITMAP) then begin
+    if not (cdtBitmap in FDataTypes) then begin
+      if GetClipboardBitmapSub(FBitmap) then begin
+        FDataTypes := FDataTypes + [cdtBitmap];
+        result := True;
+      end;
+    end;
+  end;
+  if IsClipboardFormatAvailable(CF_PNG) then begin
+    if not (cdtPng in FDataTypes) then begin
+      if GetClipboardPngSub(FPng) then begin
+        FDataTypes := FDataTypes + [cdtPng];
+        result := True;
+      end;
+    end;
+  end;
+  if IsClipboardFormatAvailable(CF_UNICODETEXT) then begin
+    if not (cdtText in FDataTypes) then begin
+      if GetClipboardTextSub(FText) then begin
+        FDataTypes := FDataTypes + [cdtText];
+        result := True;
+      end;
+    end;
+  end;
+end;
+
+procedure TClipboardWatcher.OnTimerAgent(Sender: TObject);
+begin
+  FTimerAgent.Enabled := False;
+  if SafeOpenClipboard(0) then
+  begin
+    try
+      if GetClipboard() then
+      begin
+        FTimerTimeout.Enabled := False;
+        FTimerTimeout.Enabled := True;
+      end;
+    finally
+      CloseClipboard;
+    end;
+  end;
+  FTimerAgent.Enabled := True;
+end;
+
+procedure TClipboardWatcher.OnTimerTimeOut(Sender: TObject);
+begin
+  FTimerAgent.Enabled := False;
+  FTimerTimeout.Enabled := False;
+  try
+    DoChange(FDataTypes);
+  finally
+    FDataTypes := [];
+  end;
+end;
+
+procedure TClipboardWatcher.ClipboardExecute;
+begin
+  if MilliSecondsBetween(Now, FLastTime) >= CLIPBOARD_DEBOUNCE_MS then begin
+    FLastTime := Now;
+    if not ClipboardUpdateIsSelf then
+    if FEnabled then begin
+      FTimerAgent.Enabled := False;
+      FTimerAgent.Enabled := True;
+      FTimerTimeout.Enabled := False;
+      FTimerTimeout.Enabled := True;
+    end;
+    //if FEnabled then DoClipboardChanged();
+    ClipboardUpdateIsSelf := False;
+  end;
+end;
+
+
+procedure TClipboardWatcher.WndProc(var Msg: TMessage);
+begin
+  if Msg.Msg = WM_CLIPBOARDUPDATE then begin
+    ClipboardExecute();
+  end;
+
+  Msg.Result := DefWindowProc(FWindowHandle, Msg.Msg, Msg.WParam, Msg.LParam);
+end;
+
 
 procedure SetClipboardBitmap(Bmp: TBitmap);
 const
@@ -216,226 +442,41 @@ begin
   end;
 end;
 
-
-
-constructor TClipboardWatcher.Create;
-begin
-  inherited;
-  FLastTime := 0;
-  FWindowHandle := AllocateHWnd(WndProc);
-  AddClipboardFormatListener(FWindowHandle);
-
-  FBitmap := TBitmap.Create;
-  FPng    := TPngImage.Create;
-
-  FTimerAgent := TTimer.Create(nil);
-  FTimerAgent.Enabled := False;
-  FTimerAgent.Interval := 10;
-  FTimerAgent.OnTimer := OnTimerAgent;
-
-  FTimerTimeout := TTimer.Create(nil);
-  FTimerTimeout.Enabled := False;
-  FTimerTimeout.Interval := 30;
-  FTimerTimeout.OnTimer := OnTimerTimeOut;
-
-end;
-
-destructor TClipboardWatcher.Destroy;
-begin
-  FTimerTimeout.Free;
-  FTimerAgent.Free;
-  FPng.Free;
-  FBitmap.Free;
-  RemoveClipboardFormatListener(FWindowHandle);
-  DeallocateHWnd(FWindowHandle);
-  inherited;
-end;
-
-procedure TClipboardWatcher.DoChange(
-  const DataTypes: TClipboardWatcherDataTypes);
-begin
-  if Assigned(FOnChange) then FOnChange(Self,DataTypes);
-end;
-
-function TClipboardWatcher.GetClipboard() : Boolean;
-begin
-  result := False;
-  if IsClipboardFormatAvailable(CF_BITMAP) then begin
-    if not (cdtBitmap in FDataTypes) then begin
-      if GetClipboardBitmap() then begin
-        FDataTypes := FDataTypes + [cdtBitmap];
-        result := True;
-      end;
-    end;
-  end;
-  if IsClipboardFormatAvailable(CF_PNG) then begin
-    if not (cdtPng in FDataTypes) then begin
-      if GetClipboardPng() then begin
-        FDataTypes := FDataTypes + [cdtPng];
-        result := True;
-      end;
-    end;
-  end;
-  if IsClipboardFormatAvailable(CF_UNICODETEXT) then begin
-    if not (cdtText in FDataTypes) then begin
-      if GetClipboardText() then begin
-        FDataTypes := FDataTypes + [cdtText];
-        result := True;
-      end;
-    end;
-  end;
-end;
-
-function TClipboardWatcher.GetClipboardBitmap: Boolean;
-var
-  hBmp: HBITMAP;
-begin
-  result := False;
-
-  if not IsClipboardFormatAvailable(CF_BITMAP) then Exit;
-
-  hBmp := GetClipboardData(CF_BITMAP);
-  if hBmp = 0 then Exit;
-
-  hBmp := CopyImage(hBmp, IMAGE_BITMAP, 0, 0, LR_COPYRETURNORG or LR_COPYDELETEORG);
-  if hBmp = 0 then Exit;
-
-  FBitmap.Handle := 0;
-  FBitmap.Handle := hBmp;
-  result := True;
-end;
-
-function TClipboardWatcher.GetClipboardPng: Boolean;
-var
-  hData: THandle;
-  pData: Pointer;
-  Size: Integer;
-  Stream: TMemoryStream;
+// クリップボードからビットマップ取得
+function GetClipboardBitmap(Bitmap : TBitmap) : Boolean;
 begin
   Result := False;
-
-  // WindowsでPNG形式のクリップボードフォーマットを取得（レジスタされていない場合は0）
-  if CF_PNG = 0 then
-    Exit;
-
-  if not IsClipboardFormatAvailable(CF_PNG) then Exit;
-
-  hData := GetClipboardData(CF_PNG);
-  if hData = 0 then Exit;
-
-  pData := GlobalLock(hData);
-  if not Assigned(pData) then Exit;
-
+  if not SafeOpenClipboard(0) then exit;
   try
-    Size := GlobalSize(hData);
-    if Size = 0 then Exit;
-
-    Stream := TMemoryStream.Create;
-    try
-      Stream.WriteBuffer(pData^, Size);
-      Stream.Position := 0;
-      FPng.LoadFromStream(Stream);
-      Result := True;
-    finally
-      Stream.Free;
-    end;
+    Result := GetClipboardBitmapSub(Bitmap);
   finally
-    GlobalUnlock(hData);
+    CloseClipboard;
   end;
 end;
-
-function TClipboardWatcher.GetClipboardText: Boolean;
-var
-  hData: THandle;
-  pData: PChar;
+// クリップボードからPng画像取得
+function GetClipboardPng(Png : TPngImage) : Boolean;
 begin
   Result := False;
-  FText := '';
-
-  if not IsClipboardFormatAvailable(CF_UNICODETEXT) then Exit;
-
-  hData := GetClipboardData(CF_UNICODETEXT);
-  if hData = 0 then Exit;
-
-  pData := GlobalLock(hData);
-  if not Assigned(pData) then Exit;
-
+  if not SafeOpenClipboard(0) then exit;
   try
-    FText := pData;
-    Result := True;
+    Result := GetClipboardPngSub(Png);
   finally
-    GlobalUnlock(hData);
+    CloseClipboard;
   end;
 end;
-
-procedure TClipboardWatcher.OnTimerAgent(Sender: TObject);
+// クリップボードからテキスト取得
+function GetClipboardText(var Text : string) : Boolean;
 begin
-  FTimerAgent.Enabled := False;
-  if SafeOpenClipboard(0) then
-  begin
-    try
-      if GetClipboard() then
-      begin
-        FTimerTimeout.Enabled := False;
-        FTimerTimeout.Enabled := True;
-      end;
-    finally
-      CloseClipboard;
-    end;
-  end;
-  FTimerAgent.Enabled := True;
-end;
-
-procedure TClipboardWatcher.OnTimerTimeOut(Sender: TObject);
-begin
-  FTimerAgent.Enabled := False;
-  FTimerTimeout.Enabled := False;
-  try
-    DoChange(FDataTypes);
-  finally
-    FDataTypes := [];
-  end;
-end;
-
-function TClipboardWatcher.SafeOpenClipboard(hWnd: HWND; Retry,
-  DelayMS: Integer): Boolean;
-var
-  i: Integer;
-begin
-  for i := 1 to Retry do
-  begin
-    if OpenClipboard(hWnd) then
-      Exit(True);
-    Sleep(DelayMS);
-  end;
   Result := False;
-end;
-
-procedure TClipboardWatcher.ClipboardExecute;
-begin
-  if MilliSecondsBetween(Now, FLastTime) >= CLIPBOARD_DEBOUNCE_MS then begin
-    FLastTime := Now;
-    if not ClipboardUpdateIsSelf then
-    if FEnabled then begin
-      FTimerAgent.Enabled := False;
-      FTimerAgent.Enabled := True;
-      FTimerTimeout.Enabled := False;
-      FTimerTimeout.Enabled := True;
-    end;
-    //if FEnabled then DoClipboardChanged();
-    ClipboardUpdateIsSelf := False;
+  if not SafeOpenClipboard(0) then exit;
+  try
+    Result := GetClipboardTextSub(Text);
+  finally
+    CloseClipboard;
   end;
 end;
 
 
-procedure TClipboardWatcher.WndProc(var Msg: TMessage);
-begin
-  if Msg.Msg = WM_CLIPBOARDUPDATE then begin
-    ClipboardExecute();
-  end;
-
-  Msg.Result := DefWindowProc(FWindowHandle, Msg.Msg, Msg.WParam, Msg.LParam);
-end;
 
 initialization
   CF_PNG := RegisterClipboardFormat('PNG');
