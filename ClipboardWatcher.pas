@@ -142,7 +142,7 @@ begin
 
   FTimerTimeout := TTimer.Create(nil);
   FTimerTimeout.Enabled := False;
-  FTimerTimeout.Interval := 30;
+  FTimerTimeout.Interval := 100;
   FTimerTimeout.OnTimer := OnTimerTimeOut;
 
 end;
