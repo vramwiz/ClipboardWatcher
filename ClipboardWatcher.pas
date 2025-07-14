@@ -74,6 +74,8 @@ type
     procedure ClipboardExecute();
     procedure OnTimerAgent(Sender: TObject);
     procedure OnTimerTimeOut(Sender: TObject);
+    function GetDelayMS: Integer;
+    procedure SetDelayMS(const Value: Integer);
   protected
     procedure DoChange(const DataTypes: TClipboardWatcherDataTypes);
   public
@@ -84,6 +86,8 @@ type
     property Text    : string    read FText;
     property Bitmap  : TBitmap   read FBitmap;
     property Png     : TPngImage read FPng;
+    // 最後のデータからイベント発生まで待機する時間
+    property DelayMS : Integer   read GetDelayMS write SetDelayMS;
     // クリップボード変更イベント
     property OnChange : TClipboardWatcherChangeEvent read FOnChange write FOnChange;
 
@@ -322,6 +326,16 @@ begin
     //if FEnabled then DoClipboardChanged();
     ClipboardUpdateIsSelf := False;
   end;
+end;
+
+function TClipboardWatcher.GetDelayMS: Integer;
+begin
+  result := FTimerTimeout.Interval;
+end;
+
+procedure TClipboardWatcher.SetDelayMS(const Value: Integer);
+begin
+  FTimerTimeout.Interval := Value;
 end;
 
 
