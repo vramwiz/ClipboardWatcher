@@ -33,7 +33,7 @@ unit ClipboardWatcher;
 
   Author      : vramwiz
   Created     : 2025-07-10
-  Updated     : 2025-07-10
+  Updated     : 2025-07-14
 }
 
 interface
@@ -89,8 +89,12 @@ type
 
   end;
 
+// 指定されたテキストをクリップボードにコピー
+procedure SetClipboardText(const Text: string);
 // 指定されたビットマップをクリップボードにコピー
 procedure SetClipboardBitmap(Bmp: TBitmap);
+// 指定されたPNGをクリップボードにコピー
+procedure SetClipboardPng(Png: TPngImage);
 // クリップボードからビットマップ取得
 function GetClipboardBitmap(Bitmap : TBitmap) : Boolean;
 // クリップボードからPng画像取得
@@ -331,114 +335,220 @@ begin
 end;
 
 
-procedure SetClipboardBitmap(Bmp: TBitmap);
-const
-  CF_PNG_NAME = 'PNG';
+function BuildClipboardDIB(bmp: TBitmap): HGLOBAL;
 var
-  CF_PNG: UINT;
-  tmp: TBitmap;
-  hBmp: HBITMAP;
-  hDIB, hPNG: HGLOBAL;
   rowSize, dibSize: Integer;
-  png: TPngImage;
-  stream: TMemoryStream;
+  tmp: TBitmap;
+  hDIB: HGLOBAL;
   pDIB, pBits, srcLine, dest: PByte;
-  ptr: Pointer;
   x, y: Integer;
   bih: BITMAPINFOHEADER;
 begin
+  Result := 0;
+
   if not Assigned(bmp) then Exit;
 
-  CF_PNG := RegisterClipboardFormat(CF_PNG_NAME);
-
-  ClipboardUpdateIsSelf := True;
-
-  // --- スキャンライン安全のため pf32bit でコピー ---
+  // pf32bit に変換して安全にスキャンライン操作
   tmp := TBitmap.Create;
   try
     tmp.PixelFormat := pf32bit;
     tmp.Width := bmp.Width;
     tmp.Height := bmp.Height;
-    tmp.Canvas.Draw(0, 0, bmp);  // 描画後 ScanLine 使用可能
+    tmp.Canvas.Draw(0, 0, bmp);  // 描画して変換
 
-    // --- CF_DIB (24bit RGB) 構築 ---
     rowSize := ((tmp.Width * 3 + 3) div 4) * 4;
     dibSize := SizeOf(BITMAPINFOHEADER) + rowSize * tmp.Height;
+
     hDIB := GlobalAlloc(GMEM_MOVEABLE, dibSize);
+    if hDIB = 0 then Exit;
 
-    if hDIB <> 0 then
+    pDIB := GlobalLock(hDIB);
+    if not Assigned(pDIB) then
     begin
-      pDIB := GlobalLock(hDIB);
-      if Assigned(pDIB) then
-      begin
-        FillChar(bih, SizeOf(bih), 0);
-        bih.biSize := SizeOf(bih);
-        bih.biWidth := tmp.Width;
-        bih.biHeight := tmp.Height;
-        bih.biPlanes := 1;
-        bih.biBitCount := 24;
-        bih.biCompression := BI_RGB;
-
-        Move(bih, pDIB^, SizeOf(bih));
-        pBits := pDIB + SizeOf(bih);
-
-        for y := tmp.Height - 1 downto 0 do
-        begin
-          srcLine := tmp.ScanLine[y];
-          dest := pBits;
-          for x := 0 to tmp.Width - 1 do
-          begin
-            dest^ := srcLine^;      Inc(dest); Inc(srcLine); // B
-            dest^ := srcLine^;      Inc(dest); Inc(srcLine); // G
-            dest^ := srcLine^;      Inc(dest); Inc(srcLine); // R
-            Inc(srcLine); // Skip A
-          end;
-          Inc(pBits, rowSize);
-        end;
-
-        GlobalUnlock(hDIB);
-      end;
+      GlobalFree(hDIB);
+      Exit;
     end;
 
-    // --- CF_PNG 構築 ---
-    stream := TMemoryStream.Create;
-    png := TPngImage.Create;
     try
-      png.Assign(tmp);
-      png.SaveToStream(stream);
-      stream.Position := 0;
+      // ヘッダ初期化
+      FillChar(bih, SizeOf(bih), 0);
+      bih.biSize := SizeOf(bih);
+      bih.biWidth := tmp.Width;
+      bih.biHeight := tmp.Height;
+      bih.biPlanes := 1;
+      bih.biBitCount := 24;
+      bih.biCompression := BI_RGB;
 
-      hPNG := GlobalAlloc(GMEM_MOVEABLE, stream.Size);
-      if hPNG <> 0 then
+      Move(bih, pDIB^, SizeOf(bih));
+      pBits := pDIB + SizeOf(bih);
+
+      for y := tmp.Height - 1 downto 0 do
       begin
-        ptr := GlobalLock(hPNG);
-        if Assigned(ptr) then
+        srcLine := tmp.ScanLine[y];
+        dest := pBits;
+        for x := 0 to tmp.Width - 1 do
         begin
-          Move(stream.Memory^, ptr^, stream.Size);
-          GlobalUnlock(hPNG);
+          dest^ := srcLine^;      Inc(dest); Inc(srcLine); // B
+          dest^ := srcLine^;      Inc(dest); Inc(srcLine); // G
+          dest^ := srcLine^;      Inc(dest); Inc(srcLine); // R
+          Inc(srcLine); // skip alpha
         end;
+        Inc(pBits, rowSize);
       end;
+
     finally
-      png.Free;
-      stream.Free;
+      GlobalUnlock(hDIB);
     end;
 
-    // --- 最後に CF_BITMAP を作成（破壊されないように最後！） ---
-    hBmp := CopyImage(tmp.Handle, IMAGE_BITMAP, 0, 0, LR_COPYRETURNORG or LR_COPYDELETEORG);
-
-    // --- クリップボードに登録 ---
-    if OpenClipboard(0) then
-    try
-      EmptyClipboard;
-      if hBmp <> 0 then SetClipboardData(CF_BITMAP, hBmp);
-      if hDIB <> 0 then SetClipboardData(CF_DIB, hDIB);
-      if hPNG <> 0 then SetClipboardData(CF_PNG, hPNG);
-    finally
-      CloseClipboard;
-    end;
+    Result := hDIB;
 
   finally
     tmp.Free;
+  end;
+end;
+
+function BuildClipboardPNG(png: TPngImage): HGLOBAL;
+var
+  stream: TMemoryStream;
+  hPNG: HGLOBAL;
+  ptr: Pointer;
+begin
+  Result := 0;
+
+  if not Assigned(png) then Exit;
+
+  stream := TMemoryStream.Create;
+  try
+    png.SaveToStream(stream);
+    stream.Position := 0;
+
+    hPNG := GlobalAlloc(GMEM_MOVEABLE, stream.Size);
+    if hPNG = 0 then Exit;
+
+    ptr := GlobalLock(hPNG);
+    if not Assigned(ptr) then
+    begin
+      GlobalFree(hPNG);
+      Exit;
+    end;
+
+    try
+      Move(stream.Memory^, ptr^, stream.Size);
+    finally
+      GlobalUnlock(hPNG);
+    end;
+
+    Result := hPNG;
+
+  finally
+    stream.Free;
+  end;
+end;
+
+function BuildClipboardBitmap(bmp: TBitmap): HBITMAP;
+begin
+  Result := 0;
+  if not Assigned(bmp) then Exit;
+
+  // CopyImage により HBITMAP を複製
+  Result := CopyImage(bmp.Handle, IMAGE_BITMAP, 0, 0,
+                      LR_COPYRETURNORG or LR_COPYDELETEORG);
+end;
+
+procedure SetClipboardText(const Text: string);
+begin
+  ClipboardUpdateIsSelf := True;
+  if OpenClipboard(0) then
+  try
+    EmptyClipboard;
+    Clipboard.AsText := Text;
+  finally
+    CloseClipboard;
+  end;
+end;
+
+procedure SetClipboardBitmap(Bmp: TBitmap);
+const
+  CF_PNG_NAME = 'PNG';
+var
+  CF_PNG: UINT;
+  hBmp: HBITMAP;
+  hDIB: HGLOBAL;
+  hPNG: HGLOBAL;
+  png: TPngImage;
+begin
+  if not Assigned(Bmp) then Exit;
+
+  CF_PNG := RegisterClipboardFormat(CF_PNG_NAME);
+  ClipboardUpdateIsSelf := True;
+
+  // --- データ生成 ---
+  hBmp := BuildClipboardBitmap(Bmp);
+  hDIB := BuildClipboardDIB(Bmp);
+
+  // PNGは一度 TBitmap → TPngImage へ変換してから保存
+  png := TPngImage.Create;
+  try
+    png.Assign(Bmp);
+    hPNG := BuildClipboardPNG(png);
+  finally
+    png.Free;
+  end;
+
+  // --- クリップボードに登録 ---
+  if OpenClipboard(0) then
+  try
+    EmptyClipboard;
+    if hBmp <> 0 then SetClipboardData(CF_BITMAP, hBmp);
+    if hDIB <> 0 then SetClipboardData(CF_DIB, hDIB);
+    if hPNG <> 0 then SetClipboardData(CF_PNG, hPNG);
+  finally
+    CloseClipboard;
+  end;
+end;
+
+procedure SetClipboardPng(Png: TPngImage);
+const
+  CF_PNG_NAME = 'PNG';
+var
+  CF_PNG: UINT;
+  hBmp: HBITMAP;
+  hDIB: HGLOBAL;
+  hPNG: HGLOBAL;
+  bmp: TBitmap;
+begin
+  if not Assigned(Png) then Exit;
+
+  CF_PNG := RegisterClipboardFormat(CF_PNG_NAME);
+  ClipboardUpdateIsSelf := True;
+
+  // --- TPngImage → TBitmap に変換 ---
+  bmp := TBitmap.Create;
+  try
+    bmp.PixelFormat := pf32bit;
+    bmp.Width := Png.Width;
+    bmp.Height := Png.Height;
+    bmp.Canvas.Draw(0, 0, Png);
+
+    // --- 各フォーマットのビルド ---
+    hBmp := BuildClipboardBitmap(bmp);
+    hDIB := BuildClipboardDIB(bmp);
+  finally
+    bmp.Free;
+  end;
+
+  // --- PNG はそのまま保存可能 ---
+  hPNG := BuildClipboardPNG(Png);
+
+  // --- クリップボードに登録 ---
+  if OpenClipboard(0) then
+  try
+    EmptyClipboard;
+    if hBmp <> 0 then SetClipboardData(CF_BITMAP, hBmp);
+    if hDIB <> 0 then SetClipboardData(CF_DIB, hDIB);
+    if hPNG <> 0 then SetClipboardData(CF_PNG, hPNG);
+  finally
+    CloseClipboard;
   end;
 end;
 
