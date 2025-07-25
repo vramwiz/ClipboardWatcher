@@ -33,7 +33,7 @@ unit ClipboardWatcher;
 
   Author      : vramwiz
   Created     : 2025-07-10
-  Updated     : 2025-07-14
+  Updated     : 2025-07-25
 }
 
 interface
@@ -472,12 +472,12 @@ end;
 procedure SetClipboardText(const Text: string);
 begin
   ClipboardUpdateIsSelf := True;
-  if OpenClipboard(0) then
+  Clipboard.Open;
   try
-    EmptyClipboard;
+    Clipboard.Clear;
     Clipboard.AsText := Text;
   finally
-    CloseClipboard;
+    Clipboard.Close;
   end;
 end;
 
