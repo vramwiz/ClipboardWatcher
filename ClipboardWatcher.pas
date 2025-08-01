@@ -359,16 +359,14 @@ var
   bih: BITMAPINFOHEADER;
 begin
   Result := 0;
-
   if not Assigned(bmp) then Exit;
 
-  // pf32bit に変換して安全にスキャンライン操作
   tmp := TBitmap.Create;
   try
     tmp.PixelFormat := pf32bit;
     tmp.Width := bmp.Width;
     tmp.Height := bmp.Height;
-    tmp.Canvas.Draw(0, 0, bmp);  // 描画して変換
+    tmp.Canvas.Draw(0, 0, bmp);
 
     rowSize := ((tmp.Width * 3 + 3) div 4) * 4;
     dibSize := SizeOf(BITMAPINFOHEADER) + rowSize * tmp.Height;
@@ -384,19 +382,19 @@ begin
     end;
 
     try
-      // ヘッダ初期化
       FillChar(bih, SizeOf(bih), 0);
       bih.biSize := SizeOf(bih);
       bih.biWidth := tmp.Width;
-      bih.biHeight := tmp.Height;
+      bih.biHeight := -tmp.Height; // ← 上向きにするのが超重要！
       bih.biPlanes := 1;
       bih.biBitCount := 24;
       bih.biCompression := BI_RGB;
+      bih.biSizeImage := rowSize * tmp.Height;
 
       Move(bih, pDIB^, SizeOf(bih));
       pBits := pDIB + SizeOf(bih);
 
-      for y := tmp.Height - 1 downto 0 do
+      for y := 0 to tmp.Height - 1 do
       begin
         srcLine := tmp.ScanLine[y];
         dest := pBits;
@@ -499,7 +497,7 @@ begin
   // --- データ生成 ---
   hBmp := BuildClipboardBitmap(Bmp);
   hDIB := BuildClipboardDIB(Bmp);
-
+  {
   // PNGは一度 TBitmap → TPngImage へ変換してから保存
   png := TPngImage.Create;
   try
@@ -508,14 +506,14 @@ begin
   finally
     png.Free;
   end;
-
+  }
   // --- クリップボードに登録 ---
   if OpenClipboard(0) then
   try
     EmptyClipboard;
     if hBmp <> 0 then SetClipboardData(CF_BITMAP, hBmp);
-    if hDIB <> 0 then SetClipboardData(CF_DIB, hDIB);
-    if hPNG <> 0 then SetClipboardData(CF_PNG, hPNG);
+    //if hDIB <> 0 then SetClipboardData(CF_DIB, hDIB);
+   // if hPNG <> 0 then SetClipboardData(CF_PNG, hPNG);
   finally
     CloseClipboard;
   end;
